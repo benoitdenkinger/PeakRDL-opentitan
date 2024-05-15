@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict, Any, Type, Union, Set
 import re
 import os
-
+import logging
 import hjson
 
 from systemrdl import RDLCompiler, RDLImporter, Addrmap
@@ -10,6 +10,20 @@ from systemrdl.messages import SourceRefBase
 from systemrdl import component as comp
 
 from .typemaps import sw_from_access, hw_from_access
+
+
+# Logger generation for halnode module
+import_logger = logging.getLogger("import_logger")
+# Console handler
+ch = logging.StreamHandler()
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(name)s - %(levelname)s: %(message)s')
+ch.setFormatter(formatter)
+# add the handlers to the logger
+import_logger.addHandler(ch)
+
+# Set for more verbosity
+import_logger.setLevel(logging.INFO)
 
 
 class OpenTitanImporter(RDLImporter):
@@ -23,6 +37,10 @@ class OpenTitanImporter(RDLImporter):
         """
 
         super().__init__(compiler)
+
+        # Load extra signal properties to match more opentitan features
+        props_path = os.path.join(os.path.dirname(__file__), "sig_props.rdl")
+        self.compiler.compile_file(props_path)
 
     @property
     def src_ref(self) -> SourceRefBase:
@@ -66,7 +84,6 @@ class OpenTitanImporter(RDLImporter):
                         "commit_id",
                         "alert_list",
                         "expose_reg_if",
-                        "interrupt_list",
                         "inter_signal_list",
                         "no_auto_id_regs",
                         "no_auto_feat_regs",
@@ -107,7 +124,7 @@ class OpenTitanImporter(RDLImporter):
     def warn_unsupported(self, key: str, tree: Dict):
         if key in tree:
             self.msg.warning(f"Unsupported key: {key}", self.src_ref)
-        
+
     def import_ip(self, tree: Dict ) -> None:
         for prop in OpenTitanImporter.unsupported_addrmap_props:
             self.warn_unsupported(prop, tree)
@@ -124,7 +141,7 @@ class OpenTitanImporter(RDLImporter):
             self.assign_property(C_def, "name", tree['name'])
 
         if 'one_paragraph_desc' in tree:
-            self.assign_property(C_def, "desc", tree['one_paragraph_desc']) 
+            self.assign_property(C_def, "desc", tree['one_paragraph_desc'])
         elif 'one_line_desc' in tree:               # Use one_paragraph_desc if both set
             self.assign_property(C_def, "desc", tree['one_line_desc'])
 
@@ -169,33 +186,73 @@ class OpenTitanImporter(RDLImporter):
         assert isinstance(comp_def, comp.Signal)
         return self._instantiate(comp_def, inst_name, src_ref)
 
+    def add_signal_child(self, parent: comp.Component, child: comp.Signal) -> None:
+        if not child.is_instance:
+            raise ValueError("Child must be an instance if adding to a parent")
+
+        parent.children.append(child)
+
     def add_signals(self, node : Addrmap, tree: Dict): # TODO FINISH
 
+        # Add clock and reset
+        list_type = "clocking"
+        if list_type in tree:
+            clocking = tree[list_type]
+            for entry in clocking:
+                for key, value in entry.items():
+                    print(key, value)
+                    sig_dict = {'name': value}
+                    if key == 'clock':
+                        sig_dict['desc'] = "Input clock"
+                        sig_dict['clock'] = True
+                    elif key == 'reset':
+                        sig_dict['reset_signal'] = True
+                        if value == 'rst_ni':
+                            sig_dict['desc'] = "Input reset, active low"
+                            sig_dict['activelow'] = True
+                        else:
+                            sig_dict['desc'] = "Input reset, active high"
+                            sig_dict['activehigh'] = True
+
+                    S = self.create_signal(sig_dict, 'input')
+                    self.add_signal_child(node, S)
+
+        # Add inputs/outputs
         for sig_type in ['input', 'output', 'inout']:
             list_type = f'available_{sig_type}_list'
+
             if list_type in tree:
                 for s in tree[list_type]:
                     S = self.create_signal(s, sig_type)
-                    self.add_child(node, S)
+                    self.add_signal_child(node, S)
+
+        # Add interrupts
+        list_type = "interrupt_list"
+        if list_type in tree:
+            for s in tree[list_type]:
+                S = self.create_signal(s, 'output')
+                self.add_signal_child(node, S)
+
 
     def create_signal(self, sig_dict : Dict, sig_type : str):
-        print(sig_dict)
         S = self.instantiate_signal(
                 comp_def=self.create_signal_definition(sig_dict['name']),
                 inst_name=sig_dict['name'],
                 )
 
-        self.assign_property(S, "desc", sig_dict['desc'])
+        # Set the width to 1 if not defined
+        if 'width' not in sig_dict:
+            sig_dict['signalwidth'] = 1
 
-        width = int(sig_dict['width']) if 'width' in sig_dict else 1
-        self.assign_property(S, "signalwidth", width)
+        for prop in sig_dict:
+            print(f'Assigning prop: {prop} with value: {sig_dict[prop]}')
 
-        if self.compiler.env.property_rules.lookup_property("signal_type") is None:
-            props_path = os.path.join(os.path.dirname(__file__), "sig_props.rdl")
-            self.compiler.compile_file(props_path)
-
-        sig_type_enum = self.compiler.eval(f"SignalType::{sig_type}")
-        self.assign_property(S, "signal_type", sig_type_enum)
+            if self.compiler.env.property_rules.lookup_property(prop) is None:
+                print(f'Warning: property {prop} does not exist')
+            elif prop == 'name':
+                pass
+            else:
+                self.assign_property(S, prop, sig_dict[prop])
 
         return S
 
