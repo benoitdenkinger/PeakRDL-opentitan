@@ -8,6 +8,7 @@ from systemrdl import RDLCompiler, RDLImporter, Addrmap
 from systemrdl import rdltypes
 from systemrdl.messages import SourceRefBase
 from systemrdl import component as comp
+from systemrdl.node import FieldNode
 
 from .typemaps import sw_from_access, hw_from_access
 
@@ -257,6 +258,60 @@ class OpenTitanImporter(RDLImporter):
         return S
 
     def add_registers(self, node : Addrmap, tree: Dict):
+        # Opentitan expect one register per interrupt
+        # Check we have less than 32 interrupts
+        assert len(tree["interrupt_list"]) <= 32, f"{tree['name']} module has more than 32 interrupts (not supported)."
+        # Each interrupt requires 3 registers (of 1 bit)
+        # 1. State register
+        intr_status_reg = {'name': 'intr_status'}
+        intr_status_reg['desc'] = "Interrupt status register."
+        intr_status_reg['swaccess'] = 'rw1c'
+        intr_status_reg['hwaccess'] = 'hrw'
+        # 2. Enable register
+        intr_enable_reg = {'name': 'intr_enable'}
+        intr_enable_reg['desc'] = "Interrupt enable register."
+        intr_enable_reg['swaccess'] = 'rw'
+        intr_enable_reg['hwaccess'] = 'hro'
+        # 3. Test register (no storage, only interface, sw read always returns 0)
+        intr_test_reg = {'name': 'intr_test'}
+        intr_test_reg['desc'] = "Interrupt test register."
+        intr_test_reg['swaccess'] = 'wo'
+        intr_test_reg['hwaccess'] = 'hro'
+        intr_test_reg['hwext'] = 'true'
+
+        intr_status_fields = []
+        intr_enable_fields = []
+        intr_test_fields = []
+
+        # Generate the fields inside each register
+        for cnt, intr in enumerate(tree["interrupt_list"]):
+            intr_name = intr['name']
+            desc = intr['desc']
+            resval = intr['default'] if 'default' in intr else 0
+            # Common to the 3 register fields
+            base_field = {'name': intr_name,
+                          'desc': desc,
+                          'bits': str(cnt)}
+            # State register fields can have a reset value
+            status_field = base_field.copy()
+            status_field['resval'] = resval
+            # State register fields can have a reset value
+            test_field = base_field.copy()
+            test_field['singlepulse'] = True
+            # Add the new field
+            intr_status_fields.append(status_field)
+            intr_enable_fields.append(base_field)
+            intr_test_fields.append(test_field)
+
+        intr_status_reg['fields'] = intr_status_fields
+        intr_enable_reg['fields'] = intr_enable_fields
+        intr_test_reg['fields'] = intr_test_fields
+        intr_regs = {'registers': [intr_status_reg, intr_enable_reg, intr_test_reg]}
+
+        for reg in intr_regs['registers']:
+            R = self.create_register(reg)
+            self.add_child(node, R)
+
         for reg in tree['registers']:
             R = self.create_register(reg)
             self.add_child(node, R)
@@ -266,8 +321,8 @@ class OpenTitanImporter(RDLImporter):
             self.warn_unsupported(prop, reg_dict)
 
         R = self.instantiate_reg(
-                comp_def=self.create_reg_definition(type_name=reg_dict['name']),
-                inst_name=reg_dict['name'],
+                comp_def=self.create_reg_definition(type_name=reg_dict['name'].lower()),
+                inst_name=reg_dict['name'].lower(),
                 addr_offset=self.__addroffset, # TODO
                 )
         self.__addroffset += self.regwidth//8  # TODO, any other case???
@@ -276,7 +331,14 @@ class OpenTitanImporter(RDLImporter):
 
         swaccess = reg_dict['swaccess']    if 'swaccess' in reg_dict else None
         hwaccess = reg_dict['hwaccess']    if 'hwaccess' in reg_dict else None
-        resval   = self.hex_or_dec_to_dec(reg_dict['resval']) if 'resval'   in reg_dict else 0
+        hwext = reg_dict['hwext']    if 'hwext' in reg_dict else None
+
+        # If the register is external, no storage element should be generated
+        if hwext == 'true':
+            print(R.type_name)
+            R.external = True
+
+        resval = self.hex_or_dec_to_dec(reg_dict['resval']) if 'resval' in reg_dict else 0
 
         self.add_fields(R, reg_dict, swaccess, hwaccess, resval)
 
@@ -287,7 +349,7 @@ class OpenTitanImporter(RDLImporter):
                    reg_dict: Dict,
                    default_swaccess : "str|None" = None,
                    default_hwaccess : "str|None" = None,
-                   reg_resval       : int        = 0,
+                   reg_resval       : int = 0,
                    ):
 
         for cnt, field_dict in enumerate(reg_dict['fields']):
@@ -296,9 +358,9 @@ class OpenTitanImporter(RDLImporter):
                 self.warn_unsupported(prop, field_dict)
 
             if 'name' in field_dict:
-                name = field_dict['name']
+                field_name = field_dict['name']
             else:
-                name =  f"val{cnt}"  # TODO default name
+                field_name =  f"val{cnt}"  # TODO default name
 
             bits = [int(part) for part in field_dict['bits'].split(':')]
             if len(bits) == 2:
@@ -311,34 +373,56 @@ class OpenTitanImporter(RDLImporter):
                 assert False
 
             F = self.instantiate_field(
-                    comp_def=self.create_field_definition(name),
-                    inst_name=name,
+                    comp_def=self.create_field_definition(field_name.lower()),
+                    inst_name=field_name.lower(),
                     bit_offset=bit_offset,
                     bit_width=bit_width,
                     )
 
-            val = self.assign_property(F, 'desc', field_dict['desc']) if 'desc' in field_dict else None
+            self.assign_property(F, 'desc', field_dict['desc']) if 'desc' in field_dict else None
 
             swaccess = field_dict['swaccess'] if 'swaccess' in field_dict else default_swaccess
             hwaccess = field_dict['hwaccess'] if 'hwaccess' in field_dict else default_hwaccess
 
+
+            # Assign sw properties
             sw, onwrite, onread = sw_from_access(swaccess)
 
             self.assign_property(F, "sw", sw)
-            val = self.assign_property(F, "onwrite", onwrite) if onwrite is not None else None
-            val = self.assign_property(F, "onread", onread) if onread is not None else None
+            self.assign_property(F, "onwrite", onwrite) if onwrite is not None else None
+            self.assign_property(F, "onread", onread) if onread is not None else None
 
+            # Assign hw properties
+            hw, we,  = hw_from_access(hwaccess)
+
+            self.assign_property(F, "hw", hw)
+            # Check if field is actually a storage
+            # Settings below do not implement a register in SystemRDL so it cannot have a we
+            if not(swaccess == 'ro' and (hwaccess == 'hwo' or hwaccess == 'hro')):
+                self.assign_property(F, "we", we) if we is not None else None
+
+            # Assign reset value
             if 'resval' in field_dict:
                 resval = field_dict['resval']
                 if resval == 'x':
                     self.msg.warning(f"Unsupported resval value: {resval}, using 0 instead")
                     resval = 0
                 resval = self.hex_or_dec_to_dec(resval)
+                # print(f"Field {field_name} as a reset value: {resval}")
             else:
+                # Use the reset value of the register if no field reset value
                 resval = (reg_resval & ((2**bit_width-1) << bit_offset)) >> bit_offset
+                # print(f"Field {field_name} uses register reset value: {resval}")
 
-                self.assign_property(F, "reset", resval)
+            self.assign_property(F, "reset", resval)
 
+            # Add singlepulse property if available
+            singlepulse = field_dict['singlepulse'] if 'singlepulse' in field_dict else False
+            if singlepulse == True:
+                self.assign_property(F, "singlepulse", singlepulse)
+                # print(f"Register {reg_dict['name']} field {field_dict['name']} is singlepulse with reset {resval}")
+
+            # Assign enums
             if 'enum' in field_dict:
                 enum = self.parse_enum(field_dict)
                 self.assign_property(F, "encode", enum)
@@ -354,13 +438,13 @@ class OpenTitanImporter(RDLImporter):
                 enum['name'] = "_" + enum['name']
 
             members.append(rdltypes.UserEnumMemberContainer(
-                    name=enum['name'],
+                    name=enum['name'].lower(),
                     value=int(enum['value']),
                     rdl_name=None,
                     rdl_desc=enum['desc'],
                     ))
 
-        enum_type = rdltypes.UserEnum.define_new(field_dict['name'] + "_e", members)
+        enum_type = rdltypes.UserEnum.define_new(field_dict['name'].lower() + "_e", members)
         return enum_type
 
     def hex_or_dec_to_dec(self, num : "str|int"):

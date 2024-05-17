@@ -1,5 +1,5 @@
 //
-// Extra SystemRDL features to match OpenTitan one_line_desc
+// Extra SystemRDL features to match OpenTitan ones
 //
 
 property output {
