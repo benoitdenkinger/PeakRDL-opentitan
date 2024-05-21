@@ -8,7 +8,7 @@ from systemrdl import RDLCompiler, RDLImporter, Addrmap
 from systemrdl import rdltypes
 from systemrdl.messages import SourceRefBase
 from systemrdl import component as comp
-from systemrdl.node import FieldNode
+from systemrdl.rdltypes import AccessType, OnReadType, OnWriteType
 
 from .typemaps import sw_from_access, hw_from_access
 
@@ -333,14 +333,17 @@ class OpenTitanImporter(RDLImporter):
         hwaccess = reg_dict['hwaccess']    if 'hwaccess' in reg_dict else None
         hwext = reg_dict['hwext']    if 'hwext' in reg_dict else None
 
-        # If the register is external, no storage element should be generated
-        if hwext == 'true':
-            print(R.type_name)
-            R.external = True
-
         resval = self.hex_or_dec_to_dec(reg_dict['resval']) if 'resval' in reg_dict else 0
 
+        # If the register is external, no storage element should be generated
+        if hwext == 'true':
+            print(f"Register type_name: {R.type_name}")
+            R.external = True
+
         self.add_fields(R, reg_dict, swaccess, hwaccess, resval)
+
+        for child in R.children:
+            print(f"Register {R.inst_name} is external: {R.external} with child field {child.inst_name} is external: {child.external}")
 
         return R
 
@@ -389,8 +392,27 @@ class OpenTitanImporter(RDLImporter):
             sw, onwrite, onread = sw_from_access(swaccess)
 
             self.assign_property(F, "sw", sw)
-            self.assign_property(F, "onwrite", onwrite) if onwrite is not None else None
+
+            # # If register is external set the onread/onwrite at ruser to match specification
+            # # if reg.external == True:
+            # if 'hwext' in reg_dict:
+            #     print(f"Register {reg.inst_name} is external and field {field_name} as swaccess {swaccess}")
+
+            #     assert sw in [AccessType.r, AccessType.w, AccessType.rw], f"Register {reg.inst_name} is external but has no software read or write access."
+
+            #     if sw in [AccessType.r, AccessType.rw]:
+            #         print("Adding onread property for external register")
+            #         self.assign_property(F, "onread", OnReadType.ruser)
+
+            #     if sw in [AccessType.w, AccessType.rw]:
+            #         print("Adding onwrite property for external register")
+            #         self.assign_property(F, "onwrite", OnWriteType.wuser)
+            # else:
+            #     print(f"Register {reg.inst_name} is not external and field {field_name} as swaccess {swaccess}")
+
             self.assign_property(F, "onread", onread) if onread is not None else None
+            self.assign_property(F, "onwrite", onwrite) if onwrite is not None else None
+
 
             # Assign hw properties
             hw, we,  = hw_from_access(hwaccess)
