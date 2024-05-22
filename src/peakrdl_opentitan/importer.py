@@ -104,7 +104,6 @@ class OpenTitanImporter(RDLImporter):
                         "alias_target",   #	optional	string	name of the register to apply the alias definition to.
                         "async",   #	optional	string	indicates the register must cross to a different clock domain before use. The value shown here should correspond to one of the module’s clocks.
                         "sync",   #	optional	string	indicates the register needs to be on another clock/reset domain.The value shown here should correspond to one of the module’s clocks.
-                        "hwext",   #	optional	string	‘true’ if the register is stored outside of the register module
                         "hwqe",   #	optional	string	‘true’ if hardware uses ‘q’ enable signal, which is latched signal of software write pulse.
                         "hwre",   #	optional	string	‘true’ if hardware uses ‘re’ signal, which is latched signal of software read pulse.
                         "regwen",   #	optional	string	if register is write-protected by another register, that register name should be given here. empty-string for no register write protection
@@ -262,10 +261,10 @@ class OpenTitanImporter(RDLImporter):
         assert len(tree["interrupt_list"]) <= 32, f"{tree['name']} module has more than 32 interrupts (not supported)."
         # Each interrupt requires 3 registers (of 1 bit)
         # 1. State register
-        intr_status_reg = {'name': 'intr_status'}
-        intr_status_reg['desc'] = "Interrupt status register."
-        intr_status_reg['swaccess'] = 'rw1c'
-        intr_status_reg['hwaccess'] = 'hrw'
+        intr_state_reg = {'name': 'intr_state'}
+        intr_state_reg['desc'] = "Interrupt state register."
+        intr_state_reg['swaccess'] = 'rw1c'
+        intr_state_reg['hwaccess'] = 'hrw'
         # 2. Enable register
         intr_enable_reg = {'name': 'intr_enable'}
         intr_enable_reg['desc'] = "Interrupt enable register."
@@ -285,7 +284,7 @@ class OpenTitanImporter(RDLImporter):
         # so for simplicity it is not handled here put the core file
         # of the IP should be modified to get the 'qe' pulse
 
-        intr_status_fields = []
+        intr_state_fields = []
         intr_enable_fields = []
         intr_test_fields = []
 
@@ -305,14 +304,14 @@ class OpenTitanImporter(RDLImporter):
             test_field = base_field.copy()
             # test_field['singlepulse'] = True
             # Add the new field
-            intr_status_fields.append(status_field)
+            intr_state_fields.append(status_field)
             intr_enable_fields.append(base_field)
             intr_test_fields.append(test_field)
 
-        intr_status_reg['fields'] = intr_status_fields
+        intr_state_reg['fields'] = intr_state_fields
         intr_enable_reg['fields'] = intr_enable_fields
         intr_test_reg['fields'] = intr_test_fields
-        intr_regs = {'registers': [intr_status_reg, intr_enable_reg, intr_test_reg]}
+        intr_regs = {'registers': [intr_state_reg, intr_enable_reg, intr_test_reg]}
 
         for reg in intr_regs['registers']:
             R = self.create_register(reg)
