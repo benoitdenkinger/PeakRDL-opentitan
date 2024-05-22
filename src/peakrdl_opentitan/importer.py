@@ -201,7 +201,6 @@ class OpenTitanImporter(RDLImporter):
             clocking = tree[list_type]
             for entry in clocking:
                 for key, value in entry.items():
-                    print(key, value)
                     sig_dict = {'name': value}
                     if key == 'clock':
                         sig_dict['desc'] = "Input clock"
@@ -278,6 +277,13 @@ class OpenTitanImporter(RDLImporter):
         intr_test_reg['swaccess'] = 'wo'
         intr_test_reg['hwaccess'] = 'hro'
         intr_test_reg['hwext'] = 'true'
+        # Interrupt test signal works using software write pulse
+        # opentitan uses the hwqe (hwre) keyword to create this signal
+        # SystemRDL does not provide a strict match
+        # PeakRDL regblock proposes UDPs to generate this signal,
+        # but it is only a mixture of already existing signals
+        # so for simplicity it is not handled here put the core file
+        # of the IP should be modified to get the 'qe' pulse
 
         intr_status_fields = []
         intr_enable_fields = []
@@ -297,7 +303,7 @@ class OpenTitanImporter(RDLImporter):
             status_field['resval'] = resval
             # State register fields can have a reset value
             test_field = base_field.copy()
-            test_field['singlepulse'] = True
+            # test_field['singlepulse'] = True
             # Add the new field
             intr_status_fields.append(status_field)
             intr_enable_fields.append(base_field)
@@ -329,21 +335,20 @@ class OpenTitanImporter(RDLImporter):
 
         self.assign_property(R, 'desc', reg_dict['desc'])
 
-        swaccess = reg_dict['swaccess']    if 'swaccess' in reg_dict else None
-        hwaccess = reg_dict['hwaccess']    if 'hwaccess' in reg_dict else None
-        hwext = reg_dict['hwext']    if 'hwext' in reg_dict else None
+        swaccess = reg_dict['swaccess'] if 'swaccess' in reg_dict else None
+        hwaccess = reg_dict['hwaccess'] if 'hwaccess' in reg_dict else None
+        hwext = reg_dict['hwext'] if 'hwext' in reg_dict else None
 
         resval = self.hex_or_dec_to_dec(reg_dict['resval']) if 'resval' in reg_dict else 0
 
         # If the register is external, no storage element should be generated
+        # This uses a fork of PeakRDL-systemrdl to be compatible with the systemrdl-compiler
+        # because the main PeakRDL-systemrdl code forward the register external value to the fields
+        # which generates an error from the compiler
         if hwext == 'true':
-            print(f"Register type_name: {R.type_name}")
             R.external = True
 
         self.add_fields(R, reg_dict, swaccess, hwaccess, resval)
-
-        for child in R.children:
-            print(f"Register {R.inst_name} is external: {R.external} with child field {child.inst_name} is external: {child.external}")
 
         return R
 
@@ -354,6 +359,7 @@ class OpenTitanImporter(RDLImporter):
                    default_hwaccess : "str|None" = None,
                    reg_resval       : int = 0,
                    ):
+
 
         for cnt, field_dict in enumerate(reg_dict['fields']):
 
@@ -393,23 +399,6 @@ class OpenTitanImporter(RDLImporter):
 
             self.assign_property(F, "sw", sw)
 
-            # # If register is external set the onread/onwrite at ruser to match specification
-            # # if reg.external == True:
-            # if 'hwext' in reg_dict:
-            #     print(f"Register {reg.inst_name} is external and field {field_name} as swaccess {swaccess}")
-
-            #     assert sw in [AccessType.r, AccessType.w, AccessType.rw], f"Register {reg.inst_name} is external but has no software read or write access."
-
-            #     if sw in [AccessType.r, AccessType.rw]:
-            #         print("Adding onread property for external register")
-            #         self.assign_property(F, "onread", OnReadType.ruser)
-
-            #     if sw in [AccessType.w, AccessType.rw]:
-            #         print("Adding onwrite property for external register")
-            #         self.assign_property(F, "onwrite", OnWriteType.wuser)
-            # else:
-            #     print(f"Register {reg.inst_name} is not external and field {field_name} as swaccess {swaccess}")
-
             self.assign_property(F, "onread", onread) if onread is not None else None
             self.assign_property(F, "onwrite", onwrite) if onwrite is not None else None
 
@@ -430,19 +419,11 @@ class OpenTitanImporter(RDLImporter):
                     self.msg.warning(f"Unsupported resval value: {resval}, using 0 instead")
                     resval = 0
                 resval = self.hex_or_dec_to_dec(resval)
-                # print(f"Field {field_name} as a reset value: {resval}")
             else:
                 # Use the reset value of the register if no field reset value
                 resval = (reg_resval & ((2**bit_width-1) << bit_offset)) >> bit_offset
-                # print(f"Field {field_name} uses register reset value: {resval}")
 
             self.assign_property(F, "reset", resval)
-
-            # Add singlepulse property if available
-            singlepulse = field_dict['singlepulse'] if 'singlepulse' in field_dict else False
-            if singlepulse == True:
-                self.assign_property(F, "singlepulse", singlepulse)
-                # print(f"Register {reg_dict['name']} field {field_dict['name']} is singlepulse with reset {resval}")
 
             # Assign enums
             if 'enum' in field_dict:
