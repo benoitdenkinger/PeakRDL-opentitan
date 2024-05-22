@@ -104,7 +104,6 @@ class OpenTitanImporter(RDLImporter):
                         "alias_target",   #	optional	string	name of the register to apply the alias definition to.
                         "async",   #	optional	string	indicates the register must cross to a different clock domain before use. The value shown here should correspond to one of the module’s clocks.
                         "sync",   #	optional	string	indicates the register needs to be on another clock/reset domain.The value shown here should correspond to one of the module’s clocks.
-                        "hwqe",   #	optional	string	‘true’ if hardware uses ‘q’ enable signal, which is latched signal of software write pulse.
                         "hwre",   #	optional	string	‘true’ if hardware uses ‘re’ signal, which is latched signal of software read pulse.
                         "regwen",   #	optional	string	if register is write-protected by another register, that register name should be given here. empty-string for no register write protection
                         "tags",   #	optional	string	tags for the register, following the format ‘tag_name:item1:item2…’
@@ -115,19 +114,23 @@ class OpenTitanImporter(RDLImporter):
 
     unsupported_field_props = [
                         "alias_target",   #	optional	string	name of the field to apply the alias definition to.
-                        "hwqe",   #	optional	bitrange	‘true’ if hardware uses ‘q’ enable signal, which is latched signal of software write pulse. Copied from register if not provided in field. (Tool adds if not provided.)
                         "tags",   #	optional	string	tags for the field, followed by the format ‘tag_name:item1:item2…’
                         "mubi",   #	optional	bitrange	boolean flag for whether the field is a multi-bit type
                         "auto_split",   #	optional	bitrange	boolean flag which determines whether the field should be automatically separated into 1-bit sub-fields.This flag is used as a hint for automatically generated software headers with register description.
                         ]
 
-    def warn_unsupported(self, key: str, tree: Dict):
+    unsupported_signal_props = [
+                        "type",   #	optional	string	name of the field to apply the alias definition to.
+                        "default",   #	optional	string	tags for the field, followed by the format ‘tag_name:item1:item2…’
+                        ]
+
+    def warn_unsupported(self, key: str, tree: Dict, scope: Optional[str]):
         if key in tree:
-            self.msg.warning(f"Unsupported key: {key}", self.src_ref)
+            self.msg.warning(f"{scope} unsupported key: {key}", self.src_ref)
 
     def import_ip(self, tree: Dict ) -> None:
         for prop in OpenTitanImporter.unsupported_addrmap_props:
-            self.warn_unsupported(prop, tree)
+            self.warn_unsupported(prop, tree, "Addrmap")
 
         # Check for required values
         name = tree['name']
@@ -234,6 +237,9 @@ class OpenTitanImporter(RDLImporter):
 
 
     def create_signal(self, sig_dict : Dict, sig_type : str):
+        for prop in OpenTitanImporter.unsupported_signal_props:
+            self.warn_unsupported(prop, sig_dict, f"Signal {sig_dict['name']}")
+
         S = self.instantiate_signal(
                 comp_def=self.create_signal_definition(sig_dict['name']),
                 inst_name=sig_dict['name'],
@@ -243,14 +249,10 @@ class OpenTitanImporter(RDLImporter):
         if 'width' not in sig_dict:
             sig_dict['signalwidth'] = 1
 
-        for prop in sig_dict:
-            print(f'Assigning prop: {prop} with value: {sig_dict[prop]}')
 
-            if self.compiler.env.property_rules.lookup_property(prop) is None:
-                print(f'Warning: property {prop} does not exist')
-            elif prop == 'name':
-                pass
-            else:
+
+        for prop in sig_dict:
+            if self.compiler.env.property_rules.lookup_property(prop) is not None and prop != 'name':
                 self.assign_property(S, prop, sig_dict[prop])
 
         return S
@@ -276,13 +278,9 @@ class OpenTitanImporter(RDLImporter):
         intr_test_reg['swaccess'] = 'wo'
         intr_test_reg['hwaccess'] = 'hro'
         intr_test_reg['hwext'] = 'true'
-        # Interrupt test signal works using software write pulse
-        # opentitan uses the hwqe (hwre) keyword to create this signal
-        # SystemRDL does not provide a strict match
-        # PeakRDL regblock proposes UDPs to generate this signal,
-        # but it is only a mixture of already existing signals
-        # so for simplicity it is not handled here put the core file
-        # of the IP should be modified to get the 'qe' pulse
+        # Interrupt test signal works using software write pulse ('hwqe' keyword)
+        # As intr_test is external, the 'qe' signal can be reconstructed from
+        # existing signals so no specific property is set
 
         intr_state_fields = []
         intr_enable_fields = []
@@ -323,7 +321,7 @@ class OpenTitanImporter(RDLImporter):
 
     def create_register(self, reg_dict: Dict) -> comp.Reg:
         for prop in OpenTitanImporter.unsupported_reg_props:
-            self.warn_unsupported(prop, reg_dict)
+            self.warn_unsupported(prop, reg_dict, f"Register {reg_dict['name']}")
 
         R = self.instantiate_reg(
                 comp_def=self.create_reg_definition(type_name=reg_dict['name'].lower()),
@@ -359,16 +357,19 @@ class OpenTitanImporter(RDLImporter):
                    reg_resval       : int = 0,
                    ):
 
+        # This features is given at the register level on opentitant but
+        # set at the field level here to comply with SystemRDL specifications
+        hwqe = reg_dict['hwqe'] if 'hwqe' in reg_dict else None
 
         for cnt, field_dict in enumerate(reg_dict['fields']):
-
-            for prop in OpenTitanImporter.unsupported_field_props:
-                self.warn_unsupported(prop, field_dict)
 
             if 'name' in field_dict:
                 field_name = field_dict['name']
             else:
                 field_name =  f"val{cnt}"  # TODO default name
+
+            for prop in OpenTitanImporter.unsupported_field_props:
+                self.warn_unsupported(prop, field_dict, f"Field {field_name}")
 
             bits = [int(part) for part in field_dict['bits'].split(':')]
             if len(bits) == 2:
@@ -423,6 +424,11 @@ class OpenTitanImporter(RDLImporter):
                 resval = (reg_resval & ((2**bit_width-1) << bit_offset)) >> bit_offset
 
             self.assign_property(F, "reset", resval)
+
+            # We use the swmod Systemrdl keyword to generate software access write pulse
+            # Warning: swmod can also be assert depending on the onread property (see specs).
+            if hwqe == 'true':
+                self.assign_property(F, 'swmod', True)
 
             # Assign enums
             if 'enum' in field_dict:
