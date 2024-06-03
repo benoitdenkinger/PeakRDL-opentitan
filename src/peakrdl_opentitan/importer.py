@@ -232,7 +232,7 @@ class OpenTitanImporter(RDLImporter):
         list_type = "interrupt_list"
         if list_type in tree:
             for s in tree[list_type]:
-                S = self.create_signal(s, 'output')
+                S = self.create_signal(s, 'interrupt')
                 self.add_signal_child(node, S)
 
 
@@ -240,20 +240,33 @@ class OpenTitanImporter(RDLImporter):
         for prop in OpenTitanImporter.unsupported_signal_props:
             self.warn_unsupported(prop, sig_dict, f"Signal {sig_dict['name']}")
 
+
+        # Keep the opentitan port naming convention
+        if sig_type == 'interrupt':
+            signal_inst_name = f"intr_{sig_dict['name']}_o"
+            # All interrupt are output signals
+            sig_type = 'output'
+        else:
+            signal_inst_name = sig_dict['name']
+
+
         S = self.instantiate_signal(
                 comp_def=self.create_signal_definition(sig_dict['name']),
-                inst_name=sig_dict['name'],
+                inst_name=signal_inst_name,
                 )
 
         # Set the width to 1 if not defined
         if 'width' not in sig_dict:
             sig_dict['signalwidth'] = 1
 
-
+        # Add signal type property to the signal dictionnary
+        if sig_type not in sig_dict:
+            sig_dict[sig_type] = True
 
         for prop in sig_dict:
             if self.compiler.env.property_rules.lookup_property(prop) is not None and prop != 'name':
                 self.assign_property(S, prop, sig_dict[prop])
+
 
         return S
 
