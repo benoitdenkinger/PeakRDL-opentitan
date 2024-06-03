@@ -9,6 +9,7 @@ from systemrdl import rdltypes
 from systemrdl.messages import SourceRefBase
 from systemrdl import component as comp
 from systemrdl.rdltypes import AccessType, OnReadType, OnWriteType
+from systemrdl.core.parameter import Parameter
 
 from .typemaps import sw_from_access, hw_from_access
 
@@ -148,6 +149,8 @@ class OpenTitanImporter(RDLImporter):
         elif 'one_line_desc' in tree:               # Use one_paragraph_desc if both set
             self.assign_property(C_def, "desc", tree['one_line_desc'])
 
+        self.add_parameters(C_def, tree)
+
         self.add_signals(C_def, tree)
 
         if 'regwidth' in tree:
@@ -158,6 +161,14 @@ class OpenTitanImporter(RDLImporter):
         self.add_registers(C_def, tree)
 
         self.register_root_component(C_def)
+
+    def add_parameters(self, node : Addrmap, tree: Dict):
+        param_list = tree['param_list']
+
+        for param in param_list:
+            print(f"Parameter {param['name']} is {param['type']} with default value {param['default']}")
+            param_systemrdl = Parameter(param_type=param['type'], name=param['name'])
+            node.parameters.append(param_systemrdl)
 
     def create_signal_definition(self, type_name: Optional[str] = None, src_ref: Optional[SourceRefBase] = None) -> comp.Signal:
         """
@@ -195,7 +206,7 @@ class OpenTitanImporter(RDLImporter):
 
         parent.children.append(child)
 
-    def add_signals(self, node : Addrmap, tree: Dict): # TODO FINISH
+    def add_signals(self, node : Addrmap, tree: Dict):
 
         # Add clock and reset
         list_type = "clocking"
@@ -249,11 +260,16 @@ class OpenTitanImporter(RDLImporter):
         if 'width' not in sig_dict:
             sig_dict['signalwidth'] = 1
 
-
-
         for prop in sig_dict:
             if self.compiler.env.property_rules.lookup_property(prop) is not None and prop != 'name':
                 self.assign_property(S, prop, sig_dict[prop])
+
+        if sig_type == 'input':
+            self.assign_property(S, 'input', True)
+        elif sig_type == 'output':
+            self.assign_property(S, 'output', True)
+        elif sig_type == 'inout':
+            self.assign_property(S, 'inout', True)
 
         return S
 
