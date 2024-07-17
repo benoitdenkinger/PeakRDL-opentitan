@@ -141,6 +141,8 @@ class OpenTitanImporter(RDLImporter):
         C_def = self.create_addrmap_definition(name)
 
         if 'human_name' in tree:
+            self.assign_property(C_def, "name", tree['human_name'])
+        else:
             self.assign_property(C_def, "name", tree['name'])
 
         if 'one_paragraph_desc' in tree:
@@ -412,6 +414,9 @@ class OpenTitanImporter(RDLImporter):
                 high, low = parse_bits(entry['bits'])
                 offset_entry = entry.copy()
                 offset_entry['bits'] = f"{high+bit_offset}:{low+bit_offset}"
+                # Append the idx to the name (if it exists)
+                if 'name' in offset_entry:
+                    offset_entry['name'] += f"_{i}"
                 replicated_list.append(offset_entry)
             bit_offset += max(parse_bits(entry['bits'])[0] for entry in fields_tpl) + 1
 
