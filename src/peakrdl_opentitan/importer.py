@@ -65,7 +65,7 @@ class OpenTitanImporter(RDLImporter):
             tree = hjson.load(f)
 
         self.regwidth = None
-        self.__addroffset = 0
+        self._regoffset = 0
 
         self.import_ip(tree)
 
@@ -155,6 +155,8 @@ class OpenTitanImporter(RDLImporter):
         else:
             self.regwidth = 32 # Default for regtool is 32
 
+        self.param_list = tree['param_list']
+
         self.add_registers(C_def, tree)
 
         self.register_root_component(C_def)
@@ -234,6 +236,11 @@ class OpenTitanImporter(RDLImporter):
             for s in tree[list_type]:
                 S = self.create_signal(s, 'interrupt')
                 self.add_signal_child(node, S)
+        else:
+            # If not existing create an empty list because
+            # some checks are done later in the script
+            tree["interrupt_list"] = []
+
 
 
     def create_signal(self, sig_dict : Dict, sig_type : str):
@@ -272,76 +279,154 @@ class OpenTitanImporter(RDLImporter):
 
     def add_registers(self, node : Addrmap, tree: Dict):
         # Opentitan expect one register per interrupt
-        # Check we have less than 32 interrupts
-        assert len(tree["interrupt_list"]) <= 32, f"{tree['name']} module has more than 32 interrupts (not supported)."
-        # Each interrupt requires 3 registers (of 1 bit)
-        # 1. State register
-        intr_state_reg = {'name': 'intr_state'}
-        intr_state_reg['desc'] = "Interrupt state register."
-        intr_state_reg['swaccess'] = 'rw1c'
-        intr_state_reg['hwaccess'] = 'hrw'
-        # 2. Enable register
-        intr_enable_reg = {'name': 'intr_enable'}
-        intr_enable_reg['desc'] = "Interrupt enable register."
-        intr_enable_reg['swaccess'] = 'rw'
-        intr_enable_reg['hwaccess'] = 'hro'
-        # 3. Test register (no storage, only interface, sw read always returns 0)
-        intr_test_reg = {'name': 'intr_test'}
-        intr_test_reg['desc'] = "Interrupt test register."
-        intr_test_reg['swaccess'] = 'wo'
-        intr_test_reg['hwaccess'] = 'hro'
-        intr_test_reg['hwext'] = 'true'
-        # Interrupt test signal works using software write pulse ('hwqe' keyword)
-        # As intr_test is external, the 'qe' signal can be reconstructed from
-        # existing signals so no specific property is set
+        # Check if any interrupt
+        if tree["interrupt_list"]:
+            # Check we have less than 32 interrupts
+            assert len(tree["interrupt_list"]) <= 32, f"{tree['name']} module has more than 32 interrupts (not supported)."
+            # Each interrupt requires 3 registers (of 1 bit)
+            # 1. State register
+            intr_state_reg = {'name': 'intr_state'}
+            intr_state_reg['desc'] = "Interrupt state register."
+            intr_state_reg['swaccess'] = 'rw1c'
+            intr_state_reg['hwaccess'] = 'hrw'
+            # 2. Enable register
+            intr_enable_reg = {'name': 'intr_enable'}
+            intr_enable_reg['desc'] = "Interrupt enable register."
+            intr_enable_reg['swaccess'] = 'rw'
+            intr_enable_reg['hwaccess'] = 'hro'
+            # 3. Test register (no storage, only interface, sw read always returns 0)
+            intr_test_reg = {'name': 'intr_test'}
+            intr_test_reg['desc'] = "Interrupt test register."
+            intr_test_reg['swaccess'] = 'wo'
+            intr_test_reg['hwaccess'] = 'hro'
+            intr_test_reg['hwext'] = 'true'
+            # Interrupt test signal works using software write pulse ('hwqe' keyword)
+            # As intr_test is external, the 'qe' signal can be reconstructed from
+            # existing signals so no specific property is set
 
-        intr_state_fields = []
-        intr_enable_fields = []
-        intr_test_fields = []
+            intr_state_fields = []
+            intr_enable_fields = []
+            intr_test_fields = []
 
-        # Generate the fields inside each register
-        for cnt, intr in enumerate(tree["interrupt_list"]):
-            intr_name = intr['name']
-            desc = intr['desc']
-            resval = intr['default'] if 'default' in intr else 0
-            # Common to the 3 register fields
-            base_field = {'name': intr_name,
-                          'desc': desc,
-                          'bits': str(cnt)}
-            # State register fields can have a reset value
-            status_field = base_field.copy()
-            status_field['resval'] = resval
-            # State register fields can have a reset value
-            test_field = base_field.copy()
-            # test_field['singlepulse'] = True
-            # Add the new field
-            intr_state_fields.append(status_field)
-            intr_enable_fields.append(base_field)
-            intr_test_fields.append(test_field)
+            # Generate the fields inside each register
+            for cnt, intr in enumerate(tree["interrupt_list"]):
+                intr_name = intr['name']
+                desc = intr['desc']
+                resval = intr['default'] if 'default' in intr else 0
+                # Common to the 3 register fields
+                base_field = {'name': intr_name,
+                            'desc': desc,
+                            'bits': str(cnt)}
+                # State register fields can have a reset value
+                status_field = base_field.copy()
+                status_field['resval'] = resval
+                # State register fields can have a reset value
+                test_field = base_field.copy()
+                # test_field['singlepulse'] = True
+                # Add the new field
+                intr_state_fields.append(status_field)
+                intr_enable_fields.append(base_field)
+                intr_test_fields.append(test_field)
 
-        intr_state_reg['fields'] = intr_state_fields
-        intr_enable_reg['fields'] = intr_enable_fields
-        intr_test_reg['fields'] = intr_test_fields
-        intr_regs = {'registers': [intr_state_reg, intr_enable_reg, intr_test_reg]}
+            intr_state_reg['fields'] = intr_state_fields
+            intr_enable_reg['fields'] = intr_enable_fields
+            intr_test_reg['fields'] = intr_test_fields
+            intr_regs = {'registers': [intr_state_reg, intr_enable_reg, intr_test_reg]}
 
-        for reg in intr_regs['registers']:
-            R = self.create_register(reg)
-            self.add_child(node, R)
+            for reg in intr_regs['registers']:
+                R = self.create_register(reg, self._regoffset)
+                self._regoffset += self.regwidth//8
+                # Update the offset for the next register
+                self.add_child(node, R)
 
+        # Add the explicit registers
         for reg in tree['registers']:
-            R = self.create_register(reg)
-            self.add_child(node, R)
+            if "multireg" in reg:
+                multireg_dict = reg['multireg']
+                # Attempt to convert count to an integer
+                try:
+                    count = int(multireg_dict['count'])
+                except ValueError:
+                    try:
+                        count = multireg_dict['count']
+                        # Search for the dictionary with 'name' matching count
+                        param_dict = next((d for d in self.param_list if d.get('name') == count), None)
+                        # Get the value
+                        count = int(param_dict['default'])
+                    except ValueError:
+                        raise ValueError(f"No parameter with name matching {count} was found.")
 
-    def create_register(self, reg_dict: Dict) -> comp.Reg:
+                # Not support for now, but can be easily added
+                if 'compact' not in multireg_dict:
+                    raise ValueError(f"Uncompacted multireg support not implemented.")
+                # Use the multireg entry has base model
+                reg_dict = {
+                    'name'    : multireg_dict['cname'],
+                    'desc'    : multireg_dict['desc']
+                }
+                # Check if swaccess and hwaccess at the register level
+                # It is optional as long as the field(s) provide these values
+                if 'swaccess' in multireg_dict:
+                    reg_dict['swaccess'] = multireg_dict['swaccess']
+                if 'hwaccess' in multireg_dict:
+                    reg_dict['hwaccess'] = multireg_dict['hwaccess']
+                # Replicate the fields count times
+                fields_expanded = self.replicate_and_offset_bits(multireg_dict['fields'], count)
+                # fields_expanded = [fields for fields in multireg_dict['fields'] for _ in range(count)]
+                # Add them to the reg_dict
+                reg_dict['fields'] = fields_expanded
+                # Create the register
+                R = self.create_register(reg_dict, self._regoffset)
+                # Update the offset for the next register
+                self._regoffset += self.regwidth//8
+                self.add_child(node, R)
+            elif "skipto" in reg:
+                # Next address is given by skipto
+                skipto = reg['skipto']
+                self._regoffset = int_value = int(skipto, 16)
+                continue
+            else:
+                R = self.create_register(reg, self._regoffset)
+                # Update the offset for the next register
+                self._regoffset += self.regwidth//8
+                self.add_child(node, R)
+
+    def expand_fields(self, fields_tpl: Dict, count: int) -> Dict:
+        """Field replication for multireg entries for bits not to overlap."""
+
+    def replicate_and_offset_bits(self, fields_tpl: Dict, count: int) -> Dict:
+        """Field replication for multireg entries for bits offset modification."""
+        # Distinguish bewteen "2" and "3:0" values
+        def parse_bits(bits):
+            if ':' in bits:
+                high, low = map(int, bits.split(':'))
+            else:
+                high = low = int(bits)
+            return high, low
+
+        replicated_list = []
+        bit_offset = 0
+
+        for i in range(count):
+            for entry in fields_tpl:
+                high, low = parse_bits(entry['bits'])
+                offset_entry = entry.copy()
+                offset_entry['bits'] = f"{high+bit_offset}:{low+bit_offset}"
+                replicated_list.append(offset_entry)
+            bit_offset += max(parse_bits(entry['bits'])[0] for entry in fields_tpl) + 1
+
+
+        return replicated_list
+
+    def create_register(self, reg_dict: Dict, addr_offset: int) -> comp.Reg:
         for prop in OpenTitanImporter.unsupported_reg_props:
             self.warn_unsupported(prop, reg_dict, f"Register {reg_dict['name']}")
 
         R = self.instantiate_reg(
                 comp_def=self.create_reg_definition(type_name=reg_dict['name'].lower()),
                 inst_name=reg_dict['name'].lower(),
-                addr_offset=self.__addroffset, # TODO
+                addr_offset=addr_offset
                 )
-        self.__addroffset += self.regwidth//8  # TODO, any other case???
 
         self.assign_property(R, 'desc', reg_dict['desc'])
 
@@ -384,6 +469,7 @@ class OpenTitanImporter(RDLImporter):
             for prop in OpenTitanImporter.unsupported_field_props:
                 self.warn_unsupported(prop, field_dict, f"Field {field_name}")
 
+            # bits can be either a single value, e.g., "2", or a range, e.g., "3:2"
             bits = [int(part) for part in field_dict['bits'].split(':')]
             if len(bits) == 2:
                 bit_offset = bits[1]
