@@ -372,6 +372,11 @@ class OpenTitanImporter(RDLImporter):
                     reg_dict['swaccess'] = multireg_dict['swaccess']
                 if 'hwaccess' in multireg_dict:
                     reg_dict['hwaccess'] = multireg_dict['hwaccess']
+                # Register write enable and external properties
+                if 'hwqe' in multireg_dict:
+                    reg_dict['hwqe'] = 'true'
+                if 'hwext' in multireg_dict:
+                    reg_dict['hwext'] = 'true'
                 # Replicate the fields count times
                 fields_expanded = self.replicate_and_offset_bits(multireg_dict['fields'], count)
                 # fields_expanded = [fields for fields in multireg_dict['fields'] for _ in range(count)]
@@ -443,9 +448,9 @@ class OpenTitanImporter(RDLImporter):
 
         # If the register is external, no storage element should be generated
         # This uses a fork of PeakRDL-systemrdl to be compatible with the systemrdl-compiler
-        # because the main PeakRDL-systemrdl code forward the register external value to the fields
+        # because the main PeakRDL-systemrdl code forwards the register external value to the fields
         # which generates an error from the compiler
-        if hwext == 'true':
+        if hwext in ['true', True]:
             R.external = True
 
         self.add_fields(R, reg_dict, swaccess, hwaccess, resval)
