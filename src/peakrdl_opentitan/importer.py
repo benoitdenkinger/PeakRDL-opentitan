@@ -88,9 +88,7 @@ class OpenTitanImporter(RDLImporter):
                         "inter_signal_list",
                         "no_auto_id_regs",
                         "no_auto_feat_regs",
-                        "no_auto_intr_regs",
                         "no_auto_alert_regs",
-                        "param_list",
                         "reset_request_list",
                         "scan",
                         "scan_reset",
@@ -281,8 +279,9 @@ class OpenTitanImporter(RDLImporter):
 
     def add_registers(self, node : Addrmap, tree: Dict):
         # Opentitan expect one register per interrupt
-        # Check if any interrupt
-        if tree["interrupt_list"]:
+        # Check if any interrupt and if auto generated or not
+        no_auto_intr_regs = tree['no_auto_intr_regs'] if 'no_auto_intr_regs' in tree else False
+        if tree["interrupt_list"] and not no_auto_intr_regs in ['true', True]:
             # Check we have less than 32 interrupts
             assert len(tree["interrupt_list"]) <= 32, f"{tree['name']} module has more than 32 interrupts (not supported)."
             # Each interrupt requires 3 registers (of 1 bit)
@@ -358,12 +357,13 @@ class OpenTitanImporter(RDLImporter):
                     except ValueError:
                         raise ValueError(f"No parameter with name matching {count} was found.")
 
+                # By default, multireg are compacted if only one field
                 # Not support for now, but can be easily added
-                if 'compact' not in multireg_dict:
+                if 'compact' not in multireg_dict and len(multireg_dict['fields']) > 1:
                     raise ValueError(f"Uncompacted multireg support not implemented.")
                 # Use the multireg entry has base model
                 reg_dict = {
-                    'name'    : multireg_dict['cname'],
+                    'name'    : multireg_dict['cname'] + '_' + multireg_dict['name'],
                     'desc'    : multireg_dict['desc']
                 }
                 # Check if swaccess and hwaccess at the register level
