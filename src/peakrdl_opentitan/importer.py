@@ -362,8 +362,13 @@ class OpenTitanImporter(RDLImporter):
                 if 'compact' not in multireg_dict and len(multireg_dict['fields']) > 1:
                     raise ValueError(f"Uncompacted multireg support not implemented.")
                 # Use the multireg entry has base model
+                if multireg_dict['cname'] == multireg_dict['name']:
+                    reg_name = multireg_dict['name']
+                else:
+                    reg_name = multireg_dict['name'] + '_' + multireg_dict['cname']
+
                 reg_dict = {
-                    'name'    : multireg_dict['cname'] + '_' + multireg_dict['name'],
+                    'name'    : reg_name,
                     'desc'    : multireg_dict['desc']
                 }
                 # Check if swaccess and hwaccess at the register level
